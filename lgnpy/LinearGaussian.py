@@ -27,7 +27,6 @@ class LinearGaussian(Graph):
         index_to_keep = [self.nodes.index(node)]
         index_to_reduce = [self.nodes.index(idx) for idx in list(self.g.pred[node])]
         values = self.__get_parent_calculated_means(list(self.g.pred[node]))
-        val = {n: round(v, 3) for n, v in zip(list(self.g.pred[node]), values)}
 
         mu_j = self.mean[index_to_keep]
         mu_i = self.mean[index_to_reduce]
@@ -41,13 +40,13 @@ class LinearGaussian(Graph):
         beta_0 = mu_j - np.dot(np.dot(sig_j_i, sig_i_i_inv), mu_i)
         beta = np.dot(sig_j_i, sig_i_i_inv)
 
-        new_mu = beta_0 + np.dot(beta, values)
-
-        node_values = {n: round(v, 3) for n, v in zip(list(self.g.pred[node]), values)}
-        node_beta = list(np.around(np.array(list(beta_0) + list(beta[0])), 2))
+        # node_values = {n: round(v, 3) for n, v in zip(list(self.g.pred[node]), values)}
+        node_values = {n: v for n, v in zip(list(self.g.pred[node]), values)}
+        # node_beta = list(np.around(np.array(list(beta_0) + list(beta[0])), 2))
+        node_beta = list(beta_0) + list(beta[0])
         self.parameters[node] = {"node_values": node_values, "node_betas": node_beta}
 
-        return new_mu[0], covariance[0][0]
+        return beta_0[0], covariance[0][0]
 
     def __get_parent_calculated_means(self, nodes):
         """
@@ -88,7 +87,7 @@ class LinearGaussian(Graph):
         self.inf_summary["Evidence"] = self.inf_summary.index.to_series().map(
             self.evidences
         )
-        self.inf_summary.loc[:, "Variance"] = list(np.around(np.diag(self.cov),3))
+        self.inf_summary.loc[:, "Variance"] = list(np.diag(self.cov))
 
         self.inf_summary["Mean_inferred"] = self.inf_summary.index.to_series().map(
             self.calculated_means
@@ -100,12 +99,6 @@ class LinearGaussian(Graph):
             (self.inf_summary["Mean_inferred"] - self.inf_summary["Mean"])
             / self.inf_summary["Mean"]
         ) * 100
-
-        self.inf_summary = (
-            self.inf_summary.round(4)
-            .replace(np.nan, "", regex=True)
-            .replace(0, "", regex=True)
-        )
 
         return self.inf_summary
 
@@ -158,6 +151,10 @@ class LinearGaussian(Graph):
         self.done_flags = dict.fromkeys(self.nodes)
 
         it=0
+        for root in g_temp.nodes():
+            if g_temp.in_degree(root) == 0:
+                self.calculated_means[root], self.calculated_vars[root] = self.__get_node_values(root)
+
         while not nx.is_empty(g_temp):
             it+=1
             pure_children = self.__get_pure_root_nodes(g_temp)

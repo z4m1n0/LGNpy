@@ -331,17 +331,31 @@ class Graph:
         Dataframe: Summary
 
         """
-        summary_cols = ["Node", "Mean", "Std", "Parents", "Children"]
+        if (hasattr(self, 'inf_summary')):
+            summary_cols = ["Node", "inferred Mean", "inferred Std", "Parents", "Children"]
+        else:
+            summary_cols = ["Node", "Mean", "Std", "Parents", "Children"]
         summary = pd.DataFrame(columns=summary_cols)
-        for node in self.nodes:
-            row = [
-                node,
-                round(self.data[node].mean(), 4),
-                round(self.data[node].std(), 4),
-                self.get_parents(node),
-                self.get_children(node),
-            ]
-            summary.loc[len(summary)] = row
+        if (hasattr(self, 'inf_summary')):
+            for node in self.nodes:
+                row = [
+                    node,
+                    round(self.inf_summary['Mean_inferred'][node], 4),
+                    round(self.inf_summary['Variance_inferred'][node], 4),
+                    self.get_parents(node),
+                    self.get_children(node),
+                ]
+                summary.loc[len(summary)] = row
+        else:
+            for node in self.nodes:
+                row = [
+                    node,
+                    round(self.data[node].mean(), 4),
+                    round(self.data[node].std(), 4),
+                    self.get_parents(node),
+                    self.get_children(node),
+                ]
+                summary.loc[len(summary)] = row
         return summary
 
     def draw_network(self, filename, graph=None,correlation_annotation=True,open=True):
@@ -406,16 +420,76 @@ class Graph:
 
         import seaborn as sns
         import matplotlib.pyplot as plt
+        import scipy.stats as stats
+        #
+        #
+        params = self.get_model_parameters()
+        inf_sum = self.inf_summary[['Mean_inferred', 'Mean', 'Variance_inferred', 'Variance']]
+        # from pprint import pprint
+        # pprint(params)
+        # pprint(inf_sum)
 
-        columns = 5
+        columns = 4
         sns.set(font_scale=1.0)
         rows = math.ceil(len(self.data.columns) / columns)
-        fig, ax = plt.subplots(ncols=columns, nrows=rows, figsize=(12, rows * 2))
+        fig, ax = plt.subplots(ncols=columns, nrows=rows, figsize=(columns * 2, rows * 2))
+
+        n_samples = self.data.shape[0]
+
+        samples_with_data = {}
+        for node in nx.topological_sort(self.g):
+            parents = self.get_parents(node)
+            var = inf_sum['Variance_inferred'][node]
+            beta = np.array(params[node]['node_betas']).T
+
+            x_padded = np.ones((n_samples, 1))
+            for parent in parents:
+                x_padded = np.c_[x_padded, self.data[parent]]
+
+            mu_s = x_padded @ beta
+
+            x = np.array([stats.norm.rvs(loc=mu, scale=var**0.5, size=1) for mu in mu_s]).flatten()
+            if (node == 'quality'):
+                x = np.rint(x)
+
+            samples_with_data[node] = x
+
+        samples = {}
+        for node in nx.topological_sort(self.g):
+            parents = self.get_parents(node)
+            var = inf_sum['Variance_inferred'][node]
+            beta = np.array(params[node]['node_betas']).T
+
+            x_padded = np.ones((n_samples, 1))
+            for parent in parents:
+                x_padded = np.c_[x_padded, samples[parent]]
+
+            mu_s = x_padded @ beta
+
+            x = np.array([stats.norm.rvs(loc=mu, scale=var**0.5, size=1) for mu in mu_s]).flatten()
+            if (node == 'quality'):
+                x = np.rint(x)
+
+            samples[node] = x
 
         fig.tight_layout()
         for idx, axis in enumerate(ax.flatten()):
-            sns.distplot(
-                self.data.iloc[:, idx].dropna(), norm_hist=False, ax=axis, label=""
+            node = self.data.keys()[idx]
+
+            min_x = min(samples[node].min(),samples_with_data[node].min(), self.data.iloc[:, idx].min())
+            max_x = max(samples[node].max(),samples_with_data[node].max(), self.data.iloc[:, idx].max())
+
+
+            sns.histplot(
+                    self.data.iloc[:, idx].dropna(), ax=axis, label="", kde=False, bins=20, binrange=(min_x, max_x), color="blue"
+            )
+
+            # sns.histplot(
+            #     samples_with_data[node], ax=axis, label="", kde=False, bins=20, color='black', binrange=(min_x, max_x), fill=False
+            # )
+
+            sns.histplot(
+                samples[node], ax=axis, label="", kde=False, bins=20, color='red', binrange=(min_x, max_x), fill=False
             )
 
             axis.set_title(self.data.columns[idx])
@@ -425,7 +499,7 @@ class Graph:
             plt.text(
                 0.2,
                 0.8,
-                f"u:{round(self.data.iloc[:, idx].mean(), 2)}\nsd={round(self.data.iloc[:, idx].std(), 2)}",
+                f"mu:{round(self.data.iloc[:, idx].mean(), 2)}\nstd={round(self.data.iloc[:, idx].std(), 2)}",
                 ha="center",
                 va="center",
                 transform=axis.transAxes,
@@ -434,5 +508,5 @@ class Graph:
                 break
         plt.subplots_adjust(hspace=0.4, wspace=0.1)
         if save:
-            plt.savefig(filename + ".png")
-        plt.show()
+            plt.savefig(filename)
+        # plt.show()
